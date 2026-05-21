@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tinkpad"
+version = "0.1.0"
+description = "Beautifully designed wrapper around Tinker for browsing, probing, and switching checkpoints."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Prannay Hebbar" }]
+license = { text = "MIT" }
+dependencies = [
+    "tinker>=0.21",
+    "typer>=0.12",
+    "rich>=13",
+    "httpx>=0.27",
+    "openai>=1.40",
+    "textual>=0.74",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-mock>=3"]
+
+[project.scripts]
+tinkpad = "tinkpad.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
