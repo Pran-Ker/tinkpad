@@ -17,7 +17,6 @@ from rich.panel import Panel
 from rich.text import Text
 
 from . import __version__
-from . import active as active_mod
 from . import cache as cache_mod
 from .formatting import (
     checkpoints_table,
@@ -32,7 +31,7 @@ from .registry import Registry, maybe_scan, scan, load_scan_roots, save_scan_roo
 from .tinker_client import Checkpoint, TinkerClient
 
 app = typer.Typer(
-    help="tinkpad — browse / probe / switch Tinker checkpoints.",
+    help="tinkpad — browse / probe / copy Tinker checkpoints.",
     no_args_is_help=True,
     add_completion=False,
     context_settings={"help_option_names": ["-h", "--help"]},
@@ -93,19 +92,12 @@ def _resolve_path(client: TinkerClient, query: str) -> str:
       - short run + step:   5a2c6:000010   |   5a2c6:final   |   myexp:final
       - short run only:     5a2c6   (→ latest sampler for that run)
       - experiment name:    myexp           (→ latest sampler for matching run)
-      - 'active':           the active checkpoint
       - '@latest':          most-recently-created sampler across all runs
 
     Raises typer.Exit on 0/ambiguous matches.
     """
     if query.startswith("tinker://"):
         return query
-    if query == "active":
-        a = active_mod.get_active()
-        if not a:
-            console.print("[red]no active checkpoint set[/]")
-            raise typer.Exit(1)
-        return a
     if query == "@latest":
         ckpts = [c for c in client.list_checkpoints() if c.type == "sampler" and c.created_at]
         if not ckpts:
@@ -229,9 +221,6 @@ def ls(
         console.print(
             f"[dim]showing newest {per_run} per run across {len(seen_runs)} run(s); use --all for full list[/]"
         )
-    active = active_mod.get_active()
-    if active:
-        console.print(f"[dim]active:[/] [bold]{active}[/]")
 
 
 @app.command("runs")
@@ -326,14 +315,11 @@ def tree_cmd(
                     f"{glyph} {c.checkpoint_id}  [{t_color}]{c.type}[/]  [dim]{human_size(c.size_bytes)}  {human_age(c.created_at)}[/]"
                 )
     console.print(root)
-    a = active_mod.get_active()
-    if a:
-        console.print(f"\n[dim]active:[/] [bold]{a}[/]")
 
 
 # ---------- info ----------
 @app.command("info")
-def info(path: str = typer.Argument(..., help="Full URI, short like '5a2c6:final', 'active', or '@latest'.")):
+def info(path: str = typer.Argument(..., help="Full URI, short like '5a2c6:final', or '@latest'.")):
     """Detail view of one checkpoint (with probe)."""
     reg = Registry()
     client = _client()
@@ -375,7 +361,7 @@ def info(path: str = typer.Argument(..., help="Full URI, short like '5a2c6:final
 # ---------- probe ----------
 @app.command("probe")
 def probe_cmd(
-    paths: list[str] = typer.Argument(None, help="One or more paths (full URI, short like '5a2c6:final', 'active', '@latest')."),
+    paths: list[str] = typer.Argument(None, help="One or more paths (full URI, short like '5a2c6:final', '@latest')."),
     run: Optional[str] = typer.Option(None, "--run", "-r", help="Probe every sampler ckpt in a run."),
     all_samplers: bool = typer.Option(False, "--all", "-a", help="Probe every sampler across all runs (slow)."),
 ):
@@ -390,11 +376,8 @@ def probe_cmd(
     elif paths:
         target_paths = [_resolve_path(client, p) for p in paths]
     else:
-        a = active_mod.get_active()
-        if not a:
-            console.print("[red]no path given and no active checkpoint[/]")
-            raise typer.Exit(2)
-        target_paths = [a]
+        console.print("[red]no path given[/]")
+        raise typer.Exit(2)
 
     if not target_paths:
         console.print("[yellow]no sampler checkpoints to probe[/]")
@@ -407,44 +390,6 @@ def probe_cmd(
         extra = f" — {_esc(r.error)}" if r.error and r.status != "ok" else ""
         sample = f"  [dim]{_esc(repr(r.sample))}[/]" if r.sample else ""
         console.print(f"[{color}]{r.emoji}[/] [{color}]{r.status:7}[/]{lat}  {_esc(r.tinker_path)}{sample}{extra}")
-
-
-# ---------- use / active ----------
-@app.command("use")
-def use(
-    path: str = typer.Argument(..., help="Full URI, short like '5a2c6:final', or '@latest'."),
-    no_verify: bool = typer.Option(False, "--no-verify", help="Skip the pre-flight probe."),
-):
-    """Mark a checkpoint as the active one. Other tools can source ~/.tinkpad/active.env."""
-    client = _client()
-    resolved = _resolve_path(client, path)
-    if not no_verify:
-        console.print(f"[dim]probing {resolved}…[/]")
-        res = probe_one(resolved)
-        if res.status != "ok":
-            color = {"fail": "red", "timeout": "yellow", "skipped": "yellow"}.get(res.status, "red")
-            console.print(f"[{color}]✗ probe {res.status}[/] — {res.error or 'checkpoint may not serve'}")
-            console.print("[dim]pass --no-verify to set anyway[/]")
-            raise typer.Exit(1)
-        console.print(f"[green]✓ probe ok[/] ({res.latency_ms}ms)")
-    p = active_mod.set_active(resolved)
-    console.print(f"[green]✓[/] active set: [bold]{resolved}[/]")
-    console.print(f"[dim]wrote {p} and {p.parent / 'active.env'}[/]")
-    console.print(f"[dim]to use: `source ~/.tinkpad/active.env`[/]")
-
-
-@app.command("active")
-def active(clear: bool = typer.Option(False, "--clear", "-c")):
-    """Show (or clear) the active checkpoint."""
-    if clear:
-        active_mod.clear_active()
-        console.print("[yellow]cleared.[/]")
-        return
-    a = active_mod.get_active()
-    if not a:
-        console.print("[dim](none)[/]")
-        raise typer.Exit(1)
-    console.print(a)
 
 
 # ---------- registry ----------
@@ -588,7 +533,7 @@ def doctor():
     except Exception as e:
         console.print(f"[red]✗[/] API call failed: {e}"); issues += 1
     console.print(f"[dim]registry:[/] {config.REGISTRY_PATH}")
-    console.print(f"[dim]active:  [/] {config.ACTIVE_PATH} {'(set)' if active_mod.get_active() else '(unset)'}")
+    console.print(f"[dim]cache:   [/] {cache_mod.CACHE_PATH}")
     if issues:
         raise typer.Exit(1)
 

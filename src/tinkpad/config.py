@@ -7,7 +7,6 @@ from pathlib import Path
 HOME = Path.home()
 TINKPAD_DIR = Path(os.environ.get("TINKPAD_DIR", HOME / ".tinkpad"))
 REGISTRY_PATH = TINKPAD_DIR / "registry.json"
-ACTIVE_PATH = TINKPAD_DIR / "active"
 FAVORITES_PATH = TINKPAD_DIR / "favorites.json"
 SCAN_ROOTS_PATH = TINKPAD_DIR / "scan_roots.json"
 SCAN_STAMP_PATH = TINKPAD_DIR / "scan.stamp"

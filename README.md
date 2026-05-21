@@ -1,16 +1,21 @@
 # tinkpad
 
-> A beautifully-designed wrapper around [Tinker](https://thinkingmachines.ai/tinker/) for browsing, probing, and switching between checkpoints across all your experiments.
+> A beautifully-designed wrapper around [Tinker](https://thinkingmachines.ai/tinker/) for browsing, probing, and copying checkpoint URIs across all your experiments.
 
 ![tinkpad TUI](docs/tui.png)
 
 The official `tinker` CLI lists runs and checkpoints but knows nothing about
 *which local experiment folder produced which run*, and has no built-in way
 to verify "is this checkpoint actually serving?". `tinkpad` adds both, plus
-an interactive TUI and an "active checkpoint" pointer your other scripts
-can source.
+an interactive TUI where pressing `c` on any checkpoint copies its `tinker://`
+URI to your clipboard.
 
-## What's new in 0.2
+## What's new in 0.3
+
+- **`c` in the TUI copies the selected checkpoint URI to your clipboard** with a toast confirmation.
+- **`use` / `active` removed** — the active-pointer / `~/.tinkpad/active.env` design is gone. Pick a checkpoint, copy it, paste into wherever you actually need it. Less indirection, fewer surprises.
+
+## What's in 0.2 (still here)
 
 - **Local metadata cache** — `~/.tinkpad/cache.json` keeps a snapshot of all run/checkpoint metadata so `ls`/`runs`/`tree` are instant and work offline. `tinkpad sync` refreshes.
 - **`tinkpad tree`** — filesystem-style view: experiments are folders, runs are runners inside them, checkpoints are files inside those.
@@ -27,12 +32,10 @@ can source.
 - **`tinkpad probe <path>`** — fires one tiny inference request against the
   checkpoint's OpenAI-compatible endpoint; reports OK / fail / timeout +
   latency.
-- **`tinkpad use <path>`** — marks one checkpoint as the active one; writes
-  `~/.tinkpad/active` and a sourceable `~/.tinkpad/active.env`.
 - **`tinkpad reg scan`** — walks `~/Developer` for `Zlog/<run_id>/` dirs
   and auto-registers `run_id → experiment-name`.
 - **`tinkpad tui`** — Textual-based interactive browser. Two-pane layout,
-  arrow keys to navigate, `p` to probe, `u` to mark active, `/` to search.
+  `←` `→` switch panels, `p` to probe, `c` to copy URI, `n` to rename, `/` to search.
 
 ## Install
 
@@ -42,11 +45,7 @@ python3 -m venv .venv
 .venv/bin/pip install -e .[dev]
 ```
 
-Then either:
-```bash
-.venv/bin/tinkpad doctor
-```
-or add to PATH:
+Add to PATH:
 ```bash
 export PATH="$HOME/Developer/tinkpad/.venv/bin:$PATH"
 ```
@@ -66,10 +65,7 @@ tinkpad info 5a2c6:final       # short prefix + step suffix work everywhere
 tinkpad info @latest           # info on the newest sampler across all runs
 tinkpad probe 5a2c6:30         # probe one
 tinkpad probe --run 5a2c6      # probe every sampler in a run
-tinkpad use 5a2c6:final        # probes first; refuses to set if probe fails
-tinkpad use --no-verify <uri>  # skip the pre-flight probe
-source ~/.tinkpad/active.env   # downstream scripts inherit TINKPAD_CKPT
-tinkpad tui                    # interactive browser
+tinkpad tui                    # interactive browser — press c to copy a URI
 ```
 
 ### Path resolution
@@ -79,19 +75,21 @@ Every command that takes a checkpoint accepts:
 - Short prefix + step: `abc:final`, `abc:30`, `abc:000030`
 - Short prefix alone: `abc` → newest sampler in that run
 - An experiment name (after `reg scan`): `my-sft-run:final`
-- `active` — the currently-active checkpoint
 - `@latest` — the most-recently-created sampler across all runs
 
 ## TUI keys
 
 | key             | action                                       |
 | --------------- | -------------------------------------------- |
-| arrows          | navigate runs / checkpoints                  |
+| `←` / `→`       | switch focus between runs pane and ckpts pane |
+| `↑` / `↓`       | navigate within current pane                  |
+| `c`             | **copy selected checkpoint URI to clipboard** |
 | `p` / enter     | probe selected checkpoint                    |
 | `a`             | probe every sampler in the current run       |
-| `u`             | mark selected checkpoint as active           |
+| `n`             | rename selected run (inline)                 |
 | `/`             | search experiments / runs                    |
-| `r`             | refresh from API                             |
+| `r`             | refresh from cache                           |
+| `s`             | force-sync the cache                         |
 | `q`             | quit                                         |
 
 ## File layout
@@ -99,8 +97,7 @@ Every command that takes a checkpoint accepts:
 ```
 ~/.tinkpad/
   registry.json     # run_id → experiment-name mapping
+  cache.json        # cached snapshot of runs + checkpoint metadata
   scan_roots.json   # which dirs to walk for auto-scan (default ~/Developer)
-  active            # current active checkpoint URI
-  active.env        # sourceable: exports TINKPAD_CKPT, OPENAI_BASE_URL
-  favorites.json    # (reserved)
+  scan.stamp        # mtime of last scan (TTL gate)
 ```

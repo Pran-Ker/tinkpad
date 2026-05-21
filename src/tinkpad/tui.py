@@ -10,9 +10,9 @@ Layout:
 Keys:
   ←  / →          switch focus between runs pane and checkpoints pane
   ↑  / ↓          move cursor within current pane
+  c               copy selected checkpoint URI to clipboard
   enter / space   probe selected checkpoint
   n               rename selected run (inline)
-  u               mark selected checkpoint as active
   p               probe selected checkpoint
   a               probe every sampler in current run
   r               refresh from API
@@ -30,7 +30,8 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import DataTable, Footer, Header, Input, Static
 
-from . import active as active_mod
+import subprocess
+
 from . import cache as cache_mod
 from .formatting import human_age, human_size, short_run
 from .probe import probe as probe_one
@@ -62,7 +63,7 @@ class TinkpadApp(App):
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
         Binding("s", "sync", "Sync"),
-        Binding("u", "use", "Use"),
+        Binding("c", "copy", "Copy URI"),
         Binding("p,enter,space", "probe", "Probe"),
         Binding("a", "probe_all_in_run", "Probe-run"),
         Binding("n", "rename", "Rename"),
@@ -187,10 +188,8 @@ class TinkpadApp(App):
         if t.row_count:
             t.move_cursor(row=target_index)
             self.call_after_refresh(self._render_ckpts_for_cursor)
-        active = active_mod.get_active()
         unnamed_s = f" — [red]{unnamed} unnamed[/]" if unnamed else ""
-        active_s = f"active: [bold]{active}[/]   " if active else ""
-        self.query_one("#status", Static).update(f"{active_s}{len(self.runs)} runs{unnamed_s}")
+        self.query_one("#status", Static).update(f"{len(self.runs)} runs{unnamed_s}")
 
     def _render_ckpts_for_cursor(self) -> None:
         runs_t = self.query_one("#runs-table", DataTable)
@@ -228,9 +227,7 @@ class TinkpadApp(App):
             )
 
     def _status(self, msg: str) -> None:
-        active = active_mod.get_active()
-        prefix = f"active: [bold]{active}[/]   " if active else ""
-        self.query_one("#status", Static).update(prefix + msg)
+        self.query_one("#status", Static).update(msg)
 
     # ---------- events ----------
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
@@ -334,13 +331,17 @@ class TinkpadApp(App):
                 return c
         return None
 
-    def action_use(self) -> None:
+    def action_copy(self) -> None:
         c = self._selected_ckpt()
         if not c:
-            self._status("[yellow]no checkpoint selected[/]")
+            self.notify("no checkpoint selected", severity="warning")
             return
-        active_mod.set_active(c.tinker_path)
-        self._status(f"[green]active set:[/] {c.tinker_path}")
+        uri = c.tinker_path
+        ok, how = _copy_to_clipboard(uri)
+        if ok:
+            self.notify(uri, title=f"copied to clipboard ({how})", timeout=4)
+        else:
+            self.notify(f"could not copy: {how}", severity="error", timeout=6)
 
     def action_probe(self) -> None:
         c = self._selected_ckpt()
@@ -384,6 +385,24 @@ class TinkpadApp(App):
             self._status(f"probed {len(ckpts)} checkpoint(s)")
 
         self.run_worker(_go(), exclusive=False)
+
+
+def _copy_to_clipboard(text: str) -> tuple[bool, str]:
+    """Try pbcopy first (macOS — most reliable for the user's setup),
+    then fall back to xclip/xsel. Returns (ok, how_or_error)."""
+    for cmd, label in [
+        (["pbcopy"], "pbcopy"),
+        (["xclip", "-selection", "clipboard"], "xclip"),
+        (["xsel", "--clipboard", "--input"], "xsel"),
+    ]:
+        try:
+            p = subprocess.run(cmd, input=text, text=True, check=True, capture_output=True)
+            return True, label
+        except FileNotFoundError:
+            continue
+        except subprocess.CalledProcessError as e:
+            return False, f"{label} failed: {e.stderr.strip() or e}"
+    return False, "no clipboard tool found (need pbcopy/xclip/xsel)"
 
 
 def run() -> None:

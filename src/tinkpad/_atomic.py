@@ -1,6 +1,6 @@
 """Atomic file helpers — write to temp, fsync, rename.
 
-Used by registry.save() and active.set_active() so a crash mid-write never
+Used by registry.save() and cache.save() so a crash mid-write never
 leaves a half-written file that breaks the CLI on next run.
 """
 from __future__ import annotations

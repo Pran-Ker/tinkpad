@@ -8,7 +8,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from .active import set_active as _set_active
 from .registry import Registry
 
 
@@ -29,8 +28,3 @@ def register_current_run(run_id: str, name: str | None = None) -> str:
     reg.set(run_id, name, note="from register_current_run")
     reg.save()
     return name
-
-
-def set_active(tinker_path: str) -> Path:
-    """Mark a checkpoint URI as the active one — see also `tinkpad use`."""
-    return _set_active(tinker_path)

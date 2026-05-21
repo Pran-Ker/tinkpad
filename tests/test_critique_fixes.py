@@ -160,19 +160,3 @@ def test_to_run_handles_null_last_checkpoint():
     assert r.last_sampler_checkpoint_path is None
 
 
-# ---------- use --no-verify still works ----------
-def test_use_no_verify_writes_active(tmp_path, monkeypatch):
-    monkeypatch.setenv("TINKPAD_DIR", str(tmp_path))
-    import importlib
-    from tinkpad import config, active as active_mod, cli as cli_mod2
-    importlib.reload(config)
-    importlib.reload(active_mod)
-    importlib.reload(cli_mod2)
-    # Mock the client; with --no-verify we shouldn't probe.
-    p = "tinker://abcd1234-08b6-5dc5-b927-63429a38f004:train:0/sampler_weights/final"
-    with patch("tinkpad.cli.TinkerClient", return_value=MagicMock()), \
-         patch("tinkpad.cli._resolve_path", return_value=p), \
-         patch("tinkpad.cli.probe_one") as mock_probe:
-        res = runner.invoke(cli_mod2.app, ["use", "--no-verify", p])
-    assert res.exit_code == 0
-    mock_probe.assert_not_called()

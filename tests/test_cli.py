@@ -81,22 +81,24 @@ def test_ls_with_mocked_client(tmp_path, monkeypatch):
     assert "sampler" in res.stdout and "training" in res.stdout
 
 
-def test_use_and_active(tmp_path, monkeypatch):
-    monkeypatch.setenv("TINKPAD_DIR", str(tmp_path))
-    # Reload modules so they pick up the new TINKPAD_DIR
-    import importlib
-    from tinkpad import config, active as active_mod, cli as cli_mod
-    importlib.reload(config)
-    importlib.reload(active_mod)
-    importlib.reload(cli_mod)
+def test_clipboard_copy_helper(monkeypatch):
+    """The TUI clipboard helper should call pbcopy and report success."""
+    from tinkpad import tui
+    calls = []
 
-    path = "tinker://abcd1234-08b6-5dc5-b927-63429a38f004:train:0/sampler_weights/final"
-    with patch("tinkpad.cli.TinkerClient", return_value=MagicMock()):
-        res = runner.invoke(cli_mod.app, ["use", "--no-verify", path])
-    assert res.exit_code == 0
-    res2 = runner.invoke(cli_mod.app, ["active"])
-    assert res2.exit_code == 0
-    assert path in res2.stdout
+    class _OK:
+        stderr = ""
+
+    def _fake_run(cmd, **kw):
+        calls.append((cmd, kw.get("input")))
+        return _OK()
+
+    monkeypatch.setattr(tui.subprocess, "run", _fake_run)
+    ok, how = tui._copy_to_clipboard("tinker://abc/sampler_weights/final")
+    assert ok is True
+    assert how == "pbcopy"
+    assert calls and calls[0][0] == ["pbcopy"]
+    assert calls[0][1] == "tinker://abc/sampler_weights/final"
 
 
 def test_reg_set_and_list(tmp_path, monkeypatch):
