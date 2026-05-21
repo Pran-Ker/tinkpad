@@ -10,6 +10,9 @@ REGISTRY_PATH = TINKPAD_DIR / "registry.json"
 ACTIVE_PATH = TINKPAD_DIR / "active"
 FAVORITES_PATH = TINKPAD_DIR / "favorites.json"
 SCAN_ROOTS_PATH = TINKPAD_DIR / "scan_roots.json"
+SCAN_STAMP_PATH = TINKPAD_DIR / "scan.stamp"
+# How fresh a scan must be to skip the implicit refresh on ls/runs.
+SCAN_TTL_SECONDS = 60 * 60
 
 TINKER_OAI_BASE_URL = "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1"
 

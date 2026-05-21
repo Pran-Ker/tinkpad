@@ -44,17 +44,31 @@ export PATH="$HOME/Developer/tinkpad/.venv/bin:$PATH"
 ## Quick start
 
 ```bash
-tinkpad doctor           # confirm API reachability
-tinkpad reg scan         # auto-register experiment names from ~/Developer
-tinkpad runs             # list all training runs
-tinkpad ls               # list all checkpoints joined with experiment names
-tinkpad ls --sampler --probe   # also probe every sampler — slow but thorough
-tinkpad info <tinker://…>      # detail view + probe
-tinkpad probe <tinker://…>     # one-shot probe
-tinkpad use   <tinker://…>     # mark active
+tinkpad doctor                 # confirm API reachability
+tinkpad reg scan -v            # auto-register experiment names from ~/Developer
+tinkpad runs                   # list all training runs
+tinkpad ls -s                  # list newest sampler ckpts per run (default: 3 each)
+tinkpad ls --all               # flat list (no per-run grouping)
+tinkpad ls -s -p               # also probe every sampler — slow but thorough
+tinkpad info 5a2c6:final       # short prefix + step suffix work everywhere
+tinkpad info @latest           # info on the newest sampler across all runs
+tinkpad probe 5a2c6:30         # probe one
+tinkpad probe --run 5a2c6      # probe every sampler in a run
+tinkpad use 5a2c6:final        # probes first; refuses to set if probe fails
+tinkpad use --no-verify <uri>  # skip the pre-flight probe
 source ~/.tinkpad/active.env   # downstream scripts inherit TINKPAD_CKPT
 tinkpad tui                    # interactive browser
 ```
+
+### Path resolution
+
+Every command that takes a checkpoint accepts:
+- A full URI: `tinker://abc...:train:0/sampler_weights/000010`
+- Short prefix + step: `abc:final`, `abc:30`, `abc:000030`
+- Short prefix alone: `abc` → newest sampler in that run
+- An experiment name (after `reg scan`): `my-sft-run:final`
+- `active` — the currently-active checkpoint
+- `@latest` — the most-recently-created sampler across all runs
 
 ## TUI keys
 

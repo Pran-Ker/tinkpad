@@ -27,8 +27,8 @@ from .formatting import (
     short_run,
 )
 from .probe import probe as probe_one, probe_many
-from .registry import Registry, scan, load_scan_roots, save_scan_roots
-from .tinker_client import TinkerClient
+from .registry import Registry, maybe_scan, scan, load_scan_roots, save_scan_roots
+from .tinker_client import Checkpoint, TinkerClient
 
 app = typer.Typer(
     help="tinkpad — browse / probe / switch Tinker checkpoints.",
@@ -57,7 +57,6 @@ def _resolve_run_id(client: TinkerClient, query: str) -> str:
     """
     reg = Registry()
     runs = client.list_runs()
-    # Strip tinker:// prefix in case the user pasted a full path
     q = query.removeprefix("tinker://").split("/", 1)[0]
     matches = []
     for r in runs:
@@ -72,6 +71,69 @@ def _resolve_run_id(client: TinkerClient, query: str) -> str:
     console.print(f"[red]ambiguous '{query}' — matches:[/]")
     for m in matches[:10]:
         console.print(f"  {m}")
+    raise typer.Exit(1)
+
+
+def _resolve_path(client: TinkerClient, query: str) -> str:
+    """Resolve a path-ish query to a full tinker:// checkpoint URI.
+
+    Accepted forms:
+      - full URI:           tinker://abc...:train:0/sampler_weights/000010
+      - short run + step:   5a2c6:000010   |   5a2c6:final   |   myexp:final
+      - short run only:     5a2c6   (→ latest sampler for that run)
+      - experiment name:    myexp           (→ latest sampler for matching run)
+      - 'active':           the active checkpoint
+      - '@latest':          most-recently-created sampler across all runs
+
+    Raises typer.Exit on 0/ambiguous matches.
+    """
+    if query.startswith("tinker://"):
+        return query
+    if query == "active":
+        a = active_mod.get_active()
+        if not a:
+            console.print("[red]no active checkpoint set[/]")
+            raise typer.Exit(1)
+        return a
+    if query == "@latest":
+        ckpts = [c for c in client.list_checkpoints() if c.type == "sampler" and c.created_at]
+        if not ckpts:
+            console.print("[red]no sampler checkpoints found[/]")
+            raise typer.Exit(1)
+        return max(ckpts, key=lambda c: c.created_at).tinker_path
+
+    run_part, _, step_part = query.partition(":")
+    # If the user wrote "5a2c64eb:train:0/sampler_weights/final" that's an
+    # un-prefixed full path — re-attach tinker:// and return.
+    if "/" in step_part:
+        return f"tinker://{query}"
+
+    full_rid = _resolve_run_id(client, run_part)
+    ckpts = [c for c in client.list_checkpoints(full_rid) if c.type == "sampler"]
+    if not ckpts:
+        console.print(f"[red]no sampler checkpoints for run {short_run(full_rid)}[/]")
+        raise typer.Exit(1)
+
+    if not step_part or step_part == "latest":
+        # Latest = most recently created.
+        return max(ckpts, key=lambda c: c.created_at or 0).tinker_path
+
+    # Match a checkpoint by step suffix, e.g. "final", "30", "000030".
+    norm_step = step_part.lstrip("0") or "0"
+    matches = []
+    for c in ckpts:
+        step = c.checkpoint_id.split("/")[-1]
+        if step == step_part or step.lstrip("0") == norm_step:
+            matches.append(c)
+    if len(matches) == 1:
+        return matches[0].tinker_path
+    if not matches:
+        console.print(f"[red]no step '{step_part}' in run {short_run(full_rid)}[/]")
+        console.print("[dim]available: " + ", ".join(sorted({c.checkpoint_id.split('/')[-1] for c in ckpts})) + "[/]")
+        raise typer.Exit(1)
+    console.print(f"[red]ambiguous step '{step_part}':[/]")
+    for c in matches:
+        console.print(f"  {c.tinker_path}")
     raise typer.Exit(1)
 
 
@@ -93,40 +155,56 @@ def ls(
     sampler_only: bool = typer.Option(False, "--sampler", "-s"),
     training_only: bool = typer.Option(False, "--training", "-t"),
     probe_all: bool = typer.Option(False, "--probe", "-p", help="Probe every sampler checkpoint (slow)."),
-    limit: int = typer.Option(200, "--limit", "-n"),
+    per_run: int = typer.Option(3, "--per-run", "-k", help="Show only this many checkpoints per run (newest first)."),
+    show_all: bool = typer.Option(False, "--all", "-A", help="Disable per-run grouping; flat list."),
+    limit: int = typer.Option(500, "--limit", "-n"),
 ):
-    """List checkpoints across all runs, joined with local experiment names."""
+    """List checkpoints across all runs, joined with local experiment names.
+
+    By default, groups by run and shows the newest few checkpoints per run.
+    Use `--all` for a flat list (the old behavior).
+    """
+    maybe_scan(load_scan_roots())
     reg = Registry()
-    scan(load_scan_roots())  # cheap-ish refresh
-    reg = Registry()  # reload after scan
     client = _client()
 
-    runs = {r.run_id.split(":", 1)[0]: r for r in client.list_runs()}
+    runs_by_short = {r.run_id.split(":", 1)[0]: r for r in client.list_runs()}
     if run:
-        # resolve as substring against run_id OR experiment name
         keep = set()
-        for rid in runs:
-            full = runs[rid].run_id
-            name = reg.name_for(full) or ""
-            if run in full or (name and run in name):
-                keep.add(rid)
-        runs = {k: v for k, v in runs.items() if k in keep}
+        for rid_short, r in runs_by_short.items():
+            name = reg.name_for(r.run_id) or ""
+            if run in r.run_id or (name and run in name):
+                keep.add(rid_short)
+        runs_by_short = {k: v for k, v in runs_by_short.items() if k in keep}
 
-    all_ckpts: list = []
-    if run and len(runs) == 1:
-        rid = next(iter(runs.values())).run_id
+    if run and len(runs_by_short) == 1:
+        rid = next(iter(runs_by_short.values())).run_id
         all_ckpts = client.list_checkpoints(rid)
     else:
         all_ckpts = client.list_checkpoints()
         if run:
-            keep_ids = set(runs.keys())
+            keep_ids = set(runs_by_short.keys())
             all_ckpts = [c for c in all_ckpts if c.run_id.split(":", 1)[0] in keep_ids]
 
     if sampler_only:
         all_ckpts = [c for c in all_ckpts if c.type == "sampler"]
     if training_only:
         all_ckpts = [c for c in all_ckpts if c.type == "training"]
-    all_ckpts = all_ckpts[:limit]
+
+    # Group + trim newest-first per run.
+    if not show_all:
+        grouped: dict[str, list[Checkpoint]] = {}
+        for c in all_ckpts:
+            grouped.setdefault(c.run_id.split(":", 1)[0], []).append(c)
+        trimmed: list[Checkpoint] = []
+        for rid, cs in grouped.items():
+            cs.sort(key=lambda c: c.created_at or 0, reverse=True)
+            trimmed.extend(cs[:per_run])
+        # Order groups by their newest checkpoint
+        trimmed.sort(key=lambda c: (c.run_id, -((c.created_at.timestamp() if c.created_at else 0))))
+        all_ckpts = trimmed[:limit]
+    else:
+        all_ckpts = all_ckpts[:limit]
 
     probe_status = None
     if probe_all:
@@ -139,6 +217,11 @@ def ls(
             probe_status[r.tinker_path] = f"[{color}]{r.emoji} {r.status}{lat}[/]"
 
     console.print(checkpoints_table(all_ckpts, _name_for(reg), probe_status))
+    if not show_all:
+        seen_runs = {c.run_id.split(":", 1)[0] for c in all_ckpts}
+        console.print(
+            f"[dim]showing newest {per_run} per run across {len(seen_runs)} run(s); use --all for full list[/]"
+        )
     active = active_mod.get_active()
     if active:
         console.print(f"[dim]active:[/] [bold]{active}[/]")
@@ -147,8 +230,7 @@ def ls(
 @app.command("runs")
 def runs():
     """List training runs with last-activity and last-sampler info."""
-    reg = Registry()
-    scan(load_scan_roots())
+    maybe_scan(load_scan_roots())
     reg = Registry()
     client = _client()
     rs = client.list_runs()
@@ -157,17 +239,11 @@ def runs():
 
 # ---------- info ----------
 @app.command("info")
-def info(path: str = typer.Argument(..., help="tinker:// checkpoint path or 'active'.")):
+def info(path: str = typer.Argument(..., help="Full URI, short like '5a2c6:final', 'active', or '@latest'.")):
     """Detail view of one checkpoint (with probe)."""
     reg = Registry()
     client = _client()
-    if path == "active":
-        a = active_mod.get_active()
-        if not a:
-            console.print("[red]no active checkpoint set[/]")
-            raise typer.Exit(1)
-        path = a
-    # Find checkpoint by listing the run
+    path = _resolve_path(client, path)
     rid = path.removeprefix("tinker://").split("/", 1)[0]
     try:
         ckpts = client.list_checkpoints(rid)
@@ -190,7 +266,7 @@ def info(path: str = typer.Argument(..., help="tinker:// checkpoint path or 'act
         f"[bold]public[/]     {match.public}",
         f"[bold]expires[/]    {_esc(str(match.expires_at)) if match.expires_at else '—'}",
     ]
-    console.print(Panel("\n".join(body), title=match.checkpoint_id, border_style="cyan"))
+    console.print(Panel("\n".join(body), title=match.checkpoint_id, border_style="cyan"), emoji=False)
 
     if match.type == "sampler":
         console.print("[dim]probing…[/]")
@@ -205,7 +281,7 @@ def info(path: str = typer.Argument(..., help="tinker:// checkpoint path or 'act
 # ---------- probe ----------
 @app.command("probe")
 def probe_cmd(
-    paths: list[str] = typer.Argument(None, help="One or more tinker:// paths; default = active."),
+    paths: list[str] = typer.Argument(None, help="One or more paths (full URI, short like '5a2c6:final', 'active', '@latest')."),
     run: Optional[str] = typer.Option(None, "--run", "-r", help="Probe every sampler ckpt in a run."),
     all_samplers: bool = typer.Option(False, "--all", "-a", help="Probe every sampler across all runs (slow)."),
 ):
@@ -218,7 +294,7 @@ def probe_cmd(
         full_rid = _resolve_run_id(client, run)
         target_paths = [c.tinker_path for c in client.list_checkpoints(full_rid) if c.type == "sampler"]
     elif paths:
-        target_paths = list(paths)
+        target_paths = [_resolve_path(client, p) for p in paths]
     else:
         a = active_mod.get_active()
         if not a:
@@ -241,13 +317,24 @@ def probe_cmd(
 
 # ---------- use / active ----------
 @app.command("use")
-def use(path: str = typer.Argument(..., help="tinker:// path to mark active.")):
+def use(
+    path: str = typer.Argument(..., help="Full URI, short like '5a2c6:final', or '@latest'."),
+    no_verify: bool = typer.Option(False, "--no-verify", help="Skip the pre-flight probe."),
+):
     """Mark a checkpoint as the active one. Other tools can source ~/.tinkpad/active.env."""
-    if not path.startswith("tinker://"):
-        console.print("[red]not a tinker:// path[/]")
-        raise typer.Exit(2)
-    p = active_mod.set_active(path)
-    console.print(f"[green]✓[/] active set: [bold]{path}[/]")
+    client = _client()
+    resolved = _resolve_path(client, path)
+    if not no_verify:
+        console.print(f"[dim]probing {resolved}…[/]")
+        res = probe_one(resolved)
+        if res.status != "ok":
+            color = {"fail": "red", "timeout": "yellow", "skipped": "yellow"}.get(res.status, "red")
+            console.print(f"[{color}]✗ probe {res.status}[/] — {res.error or 'checkpoint may not serve'}")
+            console.print("[dim]pass --no-verify to set anyway[/]")
+            raise typer.Exit(1)
+        console.print(f"[green]✓ probe ok[/] ({res.latency_ms}ms)")
+    p = active_mod.set_active(resolved)
+    console.print(f"[green]✓[/] active set: [bold]{resolved}[/]")
     console.print(f"[dim]wrote {p} and {p.parent / 'active.env'}[/]")
     console.print(f"[dim]to use: `source ~/.tinkpad/active.env`[/]")
 
@@ -307,19 +394,31 @@ def reg_rm(run_id: str):
 def reg_scan(
     root: list[Path] = typer.Option(None, "--root", help="Override scan roots (repeatable)."),
     save: bool = typer.Option(False, "--save", help="Persist these roots as the default."),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
 ):
     """Walk local folders for Zlog/<run_id> entries and auto-register."""
     roots = root if root else load_scan_roots()
     if save and root:
         save_scan_roots(root)
         console.print(f"[dim]saved scan roots: {root}[/]")
+    for r in roots:
+        marker = "[green]ok[/]" if r.exists() else "[red]missing[/]"
+        console.print(f"[dim]scanning:[/] {r}  {marker}")
     found = scan(roots)
     console.print(f"[green]scanned[/] {len(roots)} root(s); registered/refreshed {len(found)} entries")
-    if found:
-        for e in found[:20]:
-            console.print(f"  [bold]{e.name:30}[/] [dim]{e.run_id}[/]")
-        if len(found) > 20:
-            console.print(f"  [dim]... and {len(found) - 20} more[/]")
+    if not found:
+        console.print(
+            "[dim]No matches. tinkpad looks for either:\n"
+            "  • a folder named <run-uuid>\n"
+            "  • a folder containing Zlog/<run-uuid>/...\n"
+            "Use `tinkpad reg set <run-id> <name>` to map manually.[/]"
+        )
+        return
+    for e in found[:20] if not verbose else found:
+        src = f"  [dim]({e.source_path})[/]" if e.source_path else ""
+        console.print(f"  [bold]{e.name:30}[/] [dim]{e.run_id}[/]{src}")
+    if not verbose and len(found) > 20:
+        console.print(f"  [dim]... and {len(found) - 20} more (use -v to see all)[/]")
 
 
 @reg_app.command("roots")

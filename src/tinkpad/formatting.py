@@ -10,7 +10,9 @@ from rich import box
 
 from .tinker_client import Checkpoint, Run
 
-console = Console()
+# Disable emoji substitution globally — Tinker run IDs contain ":train:"
+# which Rich would otherwise render as 🚋.
+console = Console(emoji=False)
 
 
 def human_size(n: int) -> str:
@@ -51,7 +53,7 @@ def runs_table(runs: Iterable[Run], name_for) -> Table:
     t = Table(title="Tinker runs", box=box.SIMPLE_HEAVY, header_style="bold cyan")
     t.add_column("experiment", style="bold")
     t.add_column("run", style="dim")
-    t.add_column("model")
+    t.add_column("model", no_wrap=True, overflow="fold")
     t.add_column("lora")
     t.add_column("last activity")
     t.add_column("last sampler")
@@ -68,7 +70,7 @@ def checkpoints_table(ckpts: Iterable[Checkpoint], name_for, probe_status: dict[
     t = Table(title="Checkpoints", box=box.SIMPLE_HEAVY, header_style="bold cyan")
     t.add_column("experiment", style="bold")
     t.add_column("run", style="dim")
-    t.add_column("checkpoint")
+    t.add_column("checkpoint", no_wrap=True, overflow="fold")
     t.add_column("type")
     t.add_column("size")
     t.add_column("age")

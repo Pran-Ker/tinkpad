@@ -10,20 +10,25 @@ Downstream tools can read either form.
 """
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 
+from ._atomic import atomic_write_text
 from .config import ACTIVE_PATH, TINKPAD_DIR, TINKER_OAI_BASE_URL, ensure_dir
 
 
 def set_active(tinker_path: str) -> Path:
     ensure_dir()
-    ACTIVE_PATH.write_text(tinker_path + "\n")
+    # Write the env file FIRST so a sourcing reader never sees a new pointer
+    # paired with a stale env file.
     env = TINKPAD_DIR / "active.env"
-    env.write_text(
-        f'export TINKPAD_CKPT="{tinker_path}"\n'
-        f'export OPENAI_BASE_URL="{TINKER_OAI_BASE_URL}"\n'
-        'export OPENAI_API_KEY="${TINKER_API_KEY:-$OPENAI_API_KEY}"\n'
+    atomic_write_text(
+        env,
+        f"export TINKPAD_CKPT={shlex.quote(tinker_path)}\n"
+        f"export OPENAI_BASE_URL={shlex.quote(TINKER_OAI_BASE_URL)}\n"
+        'export OPENAI_API_KEY="${TINKER_API_KEY:-$OPENAI_API_KEY}"\n',
     )
+    atomic_write_text(ACTIVE_PATH, tinker_path + "\n")
     return ACTIVE_PATH
 
 

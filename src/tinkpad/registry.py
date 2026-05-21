@@ -17,11 +17,20 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Iterable
 
-from .config import REGISTRY_PATH, SCAN_ROOTS_PATH, DEFAULT_SCAN_ROOTS, ensure_dir
+from ._atomic import atomic_write_text
+from .config import (
+    REGISTRY_PATH,
+    SCAN_ROOTS_PATH,
+    SCAN_STAMP_PATH,
+    SCAN_TTL_SECONDS,
+    DEFAULT_SCAN_ROOTS,
+    ensure_dir,
+)
 
 # Tinker run IDs look like: 5a2c64eb-08b6-5dc5-b927-63429a38f004 (UUID) or
 # the longer form 5a2c64eb-08b6-5dc5-b927-63429a38f004:train:0
@@ -48,14 +57,31 @@ class Registry:
     def _load(self) -> None:
         if not self.path.exists():
             return
-        raw = json.loads(self.path.read_text())
+        try:
+            raw = json.loads(self.path.read_text() or "{}")
+        except json.JSONDecodeError:
+            # A truncated / corrupt registry must not kill the CLI. Quarantine
+            # the bad file (so the user can recover it) and start fresh.
+            backup = self.path.with_suffix(self.path.suffix + f".corrupt.{int(time.time())}")
+            try:
+                self.path.rename(backup)
+            except OSError:
+                pass
+            return
+        if not isinstance(raw, dict):
+            return
         for rid, data in raw.items():
-            self._entries[rid] = Entry(**data)
+            try:
+                self._entries[rid] = Entry(**data)
+            except TypeError:
+                # Schema drift on a single row shouldn't poison the rest.
+                continue
 
     def save(self) -> None:
         ensure_dir()
-        self.path.write_text(
-            json.dumps({rid: asdict(e) for rid, e in self._entries.items()}, indent=2)
+        atomic_write_text(
+            self.path,
+            json.dumps({rid: asdict(e) for rid, e in self._entries.items()}, indent=2),
         )
 
     def get(self, run_id: str) -> Entry | None:
@@ -66,10 +92,16 @@ class Registry:
         return e.name if e else None
 
     def set(self, run_id: str, name: str, source_path: str | None = None, note: str | None = None) -> Entry:
+        """Add/update an entry.
+
+        A manual entry (no source_path) is never clobbered by an auto-scan
+        (source_path set). Auto-scans CAN refresh other auto-scan entries.
+        """
         run_id = _normalize(run_id)
         existing = self._entries.get(run_id)
-        # Don't clobber a manually-named entry with an auto-scan
-        if existing and source_path and existing.source_path != source_path and not _is_auto(existing):
+        is_auto_scan_write = source_path is not None
+        existing_is_manual = existing is not None and existing.source_path is None
+        if existing and is_auto_scan_write and existing_is_manual:
             return existing
         e = Entry(run_id=run_id, name=name, source_path=source_path, note=note)
         self._entries[run_id] = e
@@ -90,19 +122,36 @@ def _normalize(run_id: str) -> str:
     return rid
 
 
-def _is_auto(e: Entry) -> bool:
-    return e.source_path is not None and (e.note is None or "auto" in (e.note or ""))
-
-
 def load_scan_roots() -> list[Path]:
     if SCAN_ROOTS_PATH.exists():
-        return [Path(p) for p in json.loads(SCAN_ROOTS_PATH.read_text())]
+        try:
+            data = json.loads(SCAN_ROOTS_PATH.read_text() or "[]")
+            if isinstance(data, list):
+                return [Path(p) for p in data]
+        except json.JSONDecodeError:
+            pass
     return list(DEFAULT_SCAN_ROOTS)
 
 
 def save_scan_roots(roots: Iterable[Path]) -> None:
-    ensure_dir()
-    SCAN_ROOTS_PATH.write_text(json.dumps([str(p) for p in roots], indent=2))
+    atomic_write_text(SCAN_ROOTS_PATH, json.dumps([str(p) for p in roots], indent=2))
+
+
+def scan_is_fresh(ttl: int = SCAN_TTL_SECONDS) -> bool:
+    try:
+        return (time.time() - SCAN_STAMP_PATH.stat().st_mtime) < ttl
+    except OSError:
+        return False
+
+
+def maybe_scan(roots: Iterable[Path] | None = None) -> list[Entry]:
+    """Run scan() only if the last scan is older than SCAN_TTL_SECONDS.
+
+    Called as a cheap implicit refresh from `ls`/`runs`.
+    """
+    if scan_is_fresh():
+        return []
+    return scan(roots)
 
 
 def scan(roots: Iterable[Path] | None = None, max_depth: int = 4) -> list[Entry]:
@@ -141,6 +190,11 @@ def scan(roots: Iterable[Path] | None = None, max_depth: int = 4) -> list[Entry]
                     e = reg.set(run_id, exp_name, source_path=str(child), note="auto-scan")
                     found.append(e)
     reg.save()
+    ensure_dir()
+    try:
+        SCAN_STAMP_PATH.touch()
+    except OSError:
+        pass
     return found
 
 

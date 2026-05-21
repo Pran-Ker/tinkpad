@@ -77,7 +77,8 @@ def test_use_and_active(tmp_path, monkeypatch):
     importlib.reload(cli_mod)
 
     path = "tinker://abcd1234-08b6-5dc5-b927-63429a38f004:train:0/sampler_weights/final"
-    res = runner.invoke(cli_mod.app, ["use", path])
+    with patch("tinkpad.cli.TinkerClient", return_value=MagicMock()):
+        res = runner.invoke(cli_mod.app, ["use", "--no-verify", path])
     assert res.exit_code == 0
     res2 = runner.invoke(cli_mod.app, ["active"])
     assert res2.exit_code == 0
