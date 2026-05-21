@@ -2,6 +2,8 @@
 
 > A beautifully-designed wrapper around [Tinker](https://thinkingmachines.ai/tinker/) for browsing, probing, and switching between checkpoints across all your experiments.
 
+![tinkpad TUI](docs/tui.png)
+
 The official `tinker` CLI lists runs and checkpoints but knows nothing about
 *which local experiment folder produced which run*, and has no built-in way
 to verify "is this checkpoint actually serving?". `tinkpad` adds both, plus
