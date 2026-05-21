@@ -57,12 +57,16 @@ def runs_table(runs: Iterable[Run], name_for) -> Table:
     t.add_column("lora")
     t.add_column("last activity")
     t.add_column("last sampler")
+    t.add_column("ckpt created")
     for r in runs:
         name = name_for(r.run_id) or "[dim]—[/dim]"
         lora = f"r={r.lora_rank}" if r.is_lora else "no"
         last_sk = r.last_sampler_checkpoint_path.split("/")[-1] if r.last_sampler_checkpoint_path else "—"
+        # Prefer sampler ckpt time, fall back to training ckpt time.
+        ckpt_t = r.last_sampler_checkpoint_created_at or r.last_checkpoint_created_at
+        ckpt_age = human_age(ckpt_t) if ckpt_t else "—"
         row_style = "red" if r.corrupted else ""
-        t.add_row(name, short_run(r.run_id), r.base_model, lora, human_age(r.last_request_time), last_sk, style=row_style)
+        t.add_row(name, short_run(r.run_id), r.base_model, lora, human_age(r.last_request_time), last_sk, ckpt_age, style=row_style)
     return t
 
 

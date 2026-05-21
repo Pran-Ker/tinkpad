@@ -51,6 +51,8 @@ def _parse_iso(s: str | None) -> datetime | None:
 def _run_to_dict(r: Run) -> dict:
     d = asdict(r)
     d["last_request_time"] = _iso(r.last_request_time)
+    d["last_checkpoint_created_at"] = _iso(r.last_checkpoint_created_at)
+    d["last_sampler_checkpoint_created_at"] = _iso(r.last_sampler_checkpoint_created_at)
     return d
 
 
@@ -64,6 +66,8 @@ def _dict_to_run(d: dict) -> Run:
         last_request_time=_parse_iso(d.get("last_request_time")),
         last_checkpoint_path=d.get("last_checkpoint_path"),
         last_sampler_checkpoint_path=d.get("last_sampler_checkpoint_path"),
+        last_checkpoint_created_at=_parse_iso(d.get("last_checkpoint_created_at")),
+        last_sampler_checkpoint_created_at=_parse_iso(d.get("last_sampler_checkpoint_created_at")),
     )
 
 

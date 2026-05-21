@@ -98,7 +98,7 @@ class TinkpadApp(App):
     # ---------- lifecycle ----------
     async def on_mount(self) -> None:
         runs_t = self.query_one("#runs-table", DataTable)
-        runs_t.add_columns("experiment", "run", "model", "last activity")
+        runs_t.add_columns("experiment", "run", "model", "last activity", "ckpt created")
         ckpts_t = self.query_one("#ckpts-table", DataTable)
         ckpts_t.add_columns("checkpoint", "type", "size", "age", "probe")
         self.query_one("#input", Input).display = False
@@ -172,11 +172,13 @@ class TinkpadApp(App):
                 label = UNNAMED_LABEL
             else:
                 label = f"[bold]{name}[/]" if not r.corrupted else f"[red bold]{name}[/]"
+            ckpt_t = r.last_sampler_checkpoint_created_at or r.last_checkpoint_created_at
             t.add_row(
                 label,
                 short_run(r.run_id),
                 r.base_model,
                 human_age(r.last_request_time),
+                human_age(ckpt_t) if ckpt_t else "—",
                 key=r.run_id,
             )
             if cursor_row_key == r.run_id:

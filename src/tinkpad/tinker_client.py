@@ -41,6 +41,10 @@ class Run:
     last_request_time: datetime | None
     last_checkpoint_path: str | None
     last_sampler_checkpoint_path: str | None
+    # When the most recent training / sampler checkpoint was actually written
+    # (distinct from last_request_time, which moves on any API call).
+    last_checkpoint_created_at: datetime | None = None
+    last_sampler_checkpoint_created_at: datetime | None = None
 
 
 class TinkerClient:
@@ -97,6 +101,8 @@ def _strip_run_id(run_id: str) -> str:
 def _to_run(r) -> Run:
     last_ck = r.last_checkpoint.tinker_path if r.last_checkpoint else None
     last_sk = r.last_sampler_checkpoint.tinker_path if r.last_sampler_checkpoint else None
+    last_ck_t = r.last_checkpoint.time if r.last_checkpoint else None
+    last_sk_t = r.last_sampler_checkpoint.time if r.last_sampler_checkpoint else None
     return Run(
         run_id=r.training_run_id,
         base_model=r.base_model,
@@ -106,6 +112,8 @@ def _to_run(r) -> Run:
         last_request_time=r.last_request_time,
         last_checkpoint_path=last_ck,
         last_sampler_checkpoint_path=last_sk,
+        last_checkpoint_created_at=last_ck_t,
+        last_sampler_checkpoint_created_at=last_sk_t,
     )
 
 
