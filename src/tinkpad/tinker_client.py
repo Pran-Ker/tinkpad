@@ -58,9 +58,19 @@ class TinkerClient:
         self._rc = self._sc.create_rest_client()
 
     # ---------- runs ----------
-    def list_runs(self) -> list[Run]:
-        resp = self._rc.list_training_runs().result()
-        return [_to_run(r) for r in resp.training_runs]
+    def list_runs(self, page_size: int = 100) -> list[Run]:
+        """Fetch every training run, transparently paginating."""
+        out: list[Run] = []
+        offset = 0
+        while True:
+            resp = self._rc.list_training_runs(limit=page_size, offset=offset).result()
+            out.extend(_to_run(r) for r in resp.training_runs)
+            cur = getattr(resp, "cursor", None)
+            total = getattr(cur, "total_count", None) if cur else None
+            if total is None or len(out) >= total or not resp.training_runs:
+                break
+            offset += len(resp.training_runs)
+        return out
 
     def get_run(self, run_id: str) -> Run:
         run_id = _strip_run_id(run_id)
@@ -68,13 +78,23 @@ class TinkerClient:
         return _to_run(r)
 
     # ---------- checkpoints ----------
-    def list_checkpoints(self, run_id: str | None = None) -> list[Checkpoint]:
+    def list_checkpoints(self, run_id: str | None = None, page_size: int = 500) -> list[Checkpoint]:
         if run_id:
             run_id = _strip_run_id(run_id)
             resp = self._rc.list_checkpoints(run_id).result()
-        else:
-            resp = self._rc.list_user_checkpoints(limit=500).result()
-        return [_to_ckpt(c) for c in resp.checkpoints]
+            return [_to_ckpt(c) for c in resp.checkpoints]
+        # User-wide: paginate.
+        out: list[Checkpoint] = []
+        offset = 0
+        while True:
+            resp = self._rc.list_user_checkpoints(limit=page_size, offset=offset).result()
+            out.extend(_to_ckpt(c) for c in resp.checkpoints)
+            cur = getattr(resp, "cursor", None)
+            total = getattr(cur, "total_count", None) if cur else None
+            if total is None or len(out) >= total or not resp.checkpoints:
+                break
+            offset += len(resp.checkpoints)
+        return out
 
     def set_ttl(self, tinker_path: str, ttl_seconds: int | None) -> None:
         if ttl_seconds is None:

@@ -116,9 +116,15 @@ class Registry:
 
 
 def _normalize(run_id: str) -> str:
-    # Strip tinker:// prefix and any trailing path
+    """Canonicalize any run-id-ish string to a single key.
+
+    `tinker://abcd-1234:train:0/sampler_weights/final`,
+    `abcd-1234:train:0`, and `abcd-1234` all map to `abcd-1234`.
+    """
     rid = run_id.removeprefix("tinker://")
     rid = rid.split("/", 1)[0]
+    if ":train:" in rid:
+        rid = rid.split(":train:", 1)[0]
     return rid
 
 

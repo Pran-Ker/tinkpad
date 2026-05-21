@@ -7,9 +7,12 @@ from tinkpad import registry as reg_mod
 from tinkpad.registry import Registry, scan, _normalize
 
 
-def test_normalize_strips_prefix_and_path():
+def test_normalize_strips_prefix_path_and_train_suffix():
     rid = "tinker://abcd1234-08b6-5dc5-b927-63429a38f004:train:0/sampler_weights/000030"
-    assert _normalize(rid) == "abcd1234-08b6-5dc5-b927-63429a38f004:train:0"
+    assert _normalize(rid) == "abcd1234-08b6-5dc5-b927-63429a38f004"
+    # All three forms collapse to the same key.
+    assert _normalize("abcd1234-08b6-5dc5-b927-63429a38f004:train:0") == "abcd1234-08b6-5dc5-b927-63429a38f004"
+    assert _normalize("abcd1234-08b6-5dc5-b927-63429a38f004") == "abcd1234-08b6-5dc5-b927-63429a38f004"
 
 
 def test_roundtrip(tmp_path, monkeypatch):
