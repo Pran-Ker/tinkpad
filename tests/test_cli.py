@@ -46,23 +46,37 @@ def test_version():
     assert "tinkpad" in res.stdout
 
 
-def test_runs_lists_with_mocked_client(monkeypatch):
+def test_runs_lists_with_mocked_client(tmp_path, monkeypatch):
+    monkeypatch.setenv("TINKPAD_DIR", str(tmp_path))
+    import importlib
+    from tinkpad import config, cache, registry, cli as cli_mod
+    importlib.reload(config); importlib.reload(cache); importlib.reload(registry); importlib.reload(cli_mod)
     mock = MagicMock()
     mock.list_runs.return_value = [_fake_run()]
+    mock.list_checkpoints.return_value = []
     with patch("tinkpad.cli.TinkerClient", return_value=mock), \
          patch("tinkpad.cli.scan", return_value=[]):
-        res = runner.invoke(app, ["runs"])
+        res = runner.invoke(cli_mod.app, ["runs"])
     assert res.exit_code == 0
     assert "gpt-oss-120b" in res.stdout
 
 
-def test_ls_with_mocked_client(monkeypatch):
+def test_ls_with_mocked_client(tmp_path, monkeypatch):
+    # Isolate cache + registry so we don't read the user's real ~/.tinkpad.
+    monkeypatch.setenv("TINKPAD_DIR", str(tmp_path))
+    import importlib
+    from tinkpad import config, cache, registry, cli as cli_mod
+    importlib.reload(config)
+    importlib.reload(cache)
+    importlib.reload(registry)
+    importlib.reload(cli_mod)
+
     mock = MagicMock()
     mock.list_runs.return_value = [_fake_run()]
     mock.list_checkpoints.return_value = [_fake_ckpt(kind="sampler"), _fake_ckpt(kind="training")]
     with patch("tinkpad.cli.TinkerClient", return_value=mock), \
          patch("tinkpad.cli.scan", return_value=[]):
-        res = runner.invoke(app, ["ls"])
+        res = runner.invoke(cli_mod.app, ["ls"])
     assert res.exit_code == 0
     assert "sampler" in res.stdout and "training" in res.stdout
 

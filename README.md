@@ -8,6 +8,16 @@ to verify "is this checkpoint actually serving?". `tinkpad` adds both, plus
 an interactive TUI and an "active checkpoint" pointer your other scripts
 can source.
 
+## What's new in 0.2
+
+- **Local metadata cache** — `~/.tinkpad/cache.json` keeps a snapshot of all run/checkpoint metadata so `ls`/`runs`/`tree` are instant and work offline. `tinkpad sync` refreshes.
+- **`tinkpad tree`** — filesystem-style view: experiments are folders, runs are runners inside them, checkpoints are files inside those.
+- **TUI rename inline** — press `n` on any run row to name it without leaving the TUI.
+- **TUI panel switching** — `←` / `→` move focus between the runs pane and the checkpoints pane.
+- **Unnamed runs flagged** — `[unnamed]` shows in dim red anywhere a run has no friendly name; `runs`/`tui` show a count.
+- **`tinkpad reg name-unnamed`** — walk every unnamed run and name them one by one.
+- **`from tinkpad import register_current_run`** — one-line Python helper to call from a training script so the run gets named at launch time.
+
 ## Features
 
 - **`tinkpad ls`** — every checkpoint, every run, joined with the local

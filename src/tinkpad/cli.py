@@ -18,6 +18,7 @@ from rich.text import Text
 
 from . import __version__
 from . import active as active_mod
+from . import cache as cache_mod
 from .formatting import (
     checkpoints_table,
     console,
@@ -48,6 +49,16 @@ def _client() -> TinkerClient:
 
 def _name_for(reg: Registry):
     return lambda rid: reg.name_for(rid)
+
+
+def _cached_or_live(force_fresh: bool = False) -> tuple[list, list]:
+    """Get runs+checkpoints from cache, refreshing if stale.
+
+    Used by read-only commands (ls/runs/tree). Falls back to whatever's on
+    disk if the API is unreachable.
+    """
+    client = _client() if (force_fresh or not cache_mod.is_fresh()) else None
+    return cache_mod.load_or_sync(client, force=force_fresh)
 
 
 def _resolve_run_id(client: TinkerClient, query: str) -> str:
@@ -166,9 +177,9 @@ def ls(
     """
     maybe_scan(load_scan_roots())
     reg = Registry()
-    client = _client()
+    runs_list, ckpts_list = _cached_or_live()
 
-    runs_by_short = {r.run_id.split(":", 1)[0]: r for r in client.list_runs()}
+    runs_by_short = {r.run_id.split(":", 1)[0]: r for r in runs_list}
     if run:
         keep = set()
         for rid_short, r in runs_by_short.items():
@@ -177,14 +188,10 @@ def ls(
                 keep.add(rid_short)
         runs_by_short = {k: v for k, v in runs_by_short.items() if k in keep}
 
-    if run and len(runs_by_short) == 1:
-        rid = next(iter(runs_by_short.values())).run_id
-        all_ckpts = client.list_checkpoints(rid)
-    else:
-        all_ckpts = client.list_checkpoints()
-        if run:
-            keep_ids = set(runs_by_short.keys())
-            all_ckpts = [c for c in all_ckpts if c.run_id.split(":", 1)[0] in keep_ids]
+    all_ckpts = ckpts_list
+    if run:
+        keep_ids = set(runs_by_short.keys())
+        all_ckpts = [c for c in all_ckpts if c.run_id.split(":", 1)[0] in keep_ids]
 
     if sampler_only:
         all_ckpts = [c for c in all_ckpts if c.type == "sampler"]
@@ -228,13 +235,100 @@ def ls(
 
 
 @app.command("runs")
-def runs():
+def runs(fresh: bool = typer.Option(False, "--fresh", help="Force-refresh from API.")):
     """List training runs with last-activity and last-sampler info."""
     maybe_scan(load_scan_roots())
     reg = Registry()
-    client = _client()
-    rs = client.list_runs()
+    rs, _ = _cached_or_live(force_fresh=fresh)
+    unnamed = sum(1 for r in rs if reg.name_for(r.run_id) is None)
     console.print(runs_table(rs, _name_for(reg)))
+    if unnamed:
+        console.print(
+            f"[red]{unnamed} unnamed run(s)[/] — give them names with [bold]tinkpad reg name-unnamed[/] or [bold]tinkpad tui[/] (press n)."
+        )
+
+
+@app.command("sync")
+def sync_cmd():
+    """Refresh the local metadata cache from the live API."""
+    client = _client()
+    n_runs, n_ckpts = cache_mod.sync(client)
+    console.print(f"[green]synced[/] — {n_runs} runs, {n_ckpts} checkpoints cached at {cache_mod.CACHE_PATH}")
+
+
+@app.command("tree")
+def tree_cmd(
+    run: Optional[str] = typer.Option(None, "--run", "-r"),
+    sampler_only: bool = typer.Option(True, "--sampler/--all-types", "-s"),
+    fresh: bool = typer.Option(False, "--fresh"),
+):
+    """File-system-style view: experiment / run / checkpoint."""
+    from rich.tree import Tree
+
+    maybe_scan(load_scan_roots())
+    reg = Registry()
+    rs, all_ckpts = _cached_or_live(force_fresh=fresh)
+
+    ckpts_by_short: dict[str, list[Checkpoint]] = {}
+    for c in all_ckpts:
+        if sampler_only and c.type != "sampler":
+            continue
+        ckpts_by_short.setdefault(c.run_id.split(":", 1)[0], []).append(c)
+    for k, v in ckpts_by_short.items():
+        v.sort(key=lambda c: c.created_at or 0, reverse=True)
+
+    # Group runs by experiment name. Each unnamed run becomes its own bucket
+    # so they don't all collapse together.
+    by_exp: dict[str, list] = {}
+    for r in rs:
+        name = reg.name_for(r.run_id)
+        if name is None:
+            key = f"__unnamed__/{short_run(r.run_id)}"
+        else:
+            key = name
+        by_exp.setdefault(key, []).append(r)
+
+    if run:
+        ql = run.lower()
+        by_exp = {
+            k: [r for r in v if (ql in r.run_id.lower() or (reg.name_for(r.run_id) and ql in reg.name_for(r.run_id).lower()))]
+            for k, v in by_exp.items()
+        }
+        by_exp = {k: v for k, v in by_exp.items() if v}
+
+    def _label_for(key: str) -> str:
+        if key.startswith("__unnamed__/"):
+            short = key.split("/", 1)[1]
+            return f"📁 [red dim]\\[unnamed][/] [dim]{short}[/]"
+        return f"📁 [bold]{key}[/]"
+
+    root = Tree("[bold cyan]tinkpad[/]  [dim]experiments → runs → checkpoints[/]")
+    # Named first (alphabetical), unnamed last (by short id).
+    named_keys = sorted([k for k in by_exp if not k.startswith("__unnamed__/")], key=str.lower)
+    unnamed_keys = sorted([k for k in by_exp if k.startswith("__unnamed__/")])
+    for exp_name in named_keys + unnamed_keys:
+        runs_for = by_exp[exp_name]
+        exp_node = root.add(_label_for(exp_name))
+        for r in runs_for:
+            run_label = f"🏃 [dim]{short_run(r.run_id)}[/]  [italic]{r.base_model}[/]  [dim]{human_age(r.last_request_time)}[/]"
+            if r.corrupted:
+                run_label += " [red](corrupted)[/]"
+            run_node = exp_node.add(run_label)
+            short = r.run_id.split(":", 1)[0]
+            ckpts = ckpts_by_short.get(short, [])
+            if not ckpts:
+                run_node.add("[dim](no checkpoints)[/]")
+                continue
+            for c in ckpts:
+                glyph = "📦" if c.type == "sampler" else "🧱"
+                t_color = "magenta" if c.type == "sampler" else "yellow"
+                run_node.add(
+                    f"{glyph} {c.checkpoint_id}  [{t_color}]{c.type}[/]  [dim]{human_size(c.size_bytes)}  {human_age(c.created_at)}[/]"
+                )
+    console.print(root)
+    a = active_mod.get_active()
+    if a:
+        console.print(f"\n[dim]active:[/] [bold]{a}[/]")
 
 
 # ---------- info ----------
@@ -419,6 +513,39 @@ def reg_scan(
         console.print(f"  [bold]{e.name:30}[/] [dim]{e.run_id}[/]{src}")
     if not verbose and len(found) > 20:
         console.print(f"  [dim]... and {len(found) - 20} more (use -v to see all)[/]")
+
+
+@reg_app.command("name-unnamed")
+def reg_name_unnamed():
+    """Walk every unnamed run and prompt for a name. Blank = skip."""
+    rs, _ = _cached_or_live()
+    reg = Registry()
+    unnamed = [r for r in rs if reg.name_for(r.run_id) is None]
+    if not unnamed:
+        console.print("[green]all runs already have names[/]")
+        return
+    console.print(f"[bold]{len(unnamed)} unnamed run(s)[/]  [dim](blank = skip, ctrl-c = stop)[/]\n")
+    named = 0
+    for i, r in enumerate(unnamed, 1):
+        last_sk = r.last_sampler_checkpoint_path.split("/")[-1] if r.last_sampler_checkpoint_path else "—"
+        console.print(
+            f"[bold]({i}/{len(unnamed)})[/]  {short_run(r.run_id)}  "
+            f"[italic]{r.base_model}[/]  [dim]{human_age(r.last_request_time)}  last sampler: {last_sk}[/]"
+        )
+        try:
+            new_name = typer.prompt("  name", default="", show_default=False)
+        except (KeyboardInterrupt, typer.Abort):
+            console.print("\n[yellow]stopped[/]")
+            break
+        new_name = new_name.strip()
+        if new_name:
+            reg.set(r.run_id, new_name)
+            reg.save()
+            named += 1
+            console.print(f"  [green]✓ {new_name}[/]\n")
+        else:
+            console.print("  [dim]skipped[/]\n")
+    console.print(f"[green]named {named} run(s)[/]")
 
 
 @reg_app.command("roots")
